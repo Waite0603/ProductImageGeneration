@@ -12,9 +12,11 @@ const props = defineProps({
   cancelText: { type: String, default: '取消' },
   hideCancel: { type: Boolean, default: false },
   danger: { type: Boolean, default: false },
+  nameModes: { type: Array, default: () => [] },
+  nameMode: { type: String, default: '' },
 })
 
-const emit = defineEmits(['close', 'confirm', 'update:inputValue'])
+const emit = defineEmits(['close', 'confirm', 'update:inputValue', 'update:nameMode'])
 
 const field = ref(null)
 const draft = ref(props.inputValue)
@@ -26,7 +28,7 @@ watch(
     draft.value = props.inputValue
     nextTick(() => {
       field.value?.focus()
-      field.value?.select?.()
+      if (props.nameMode !== 'custom') field.value?.select?.()
     })
   },
 )
@@ -66,13 +68,25 @@ function submit() {
           <h3 id="app-modal-title">{{ title }}</h3>
         </header>
         <p v-if="message" class="modal-msg">{{ message }}</p>
+        <div v-if="nameModes.length" class="modal-modes">
+          <button
+            v-for="item in nameModes"
+            :key="item.id"
+            type="button"
+            class="modal-mode"
+            :class="{ active: nameMode === item.id }"
+            @click="emit('update:nameMode', item.id)"
+          >
+            {{ item.label }}
+          </button>
+        </div>
         <input
           v-if="input"
           ref="field"
           v-model="draft"
           class="modal-input"
           type="text"
-          :placeholder="inputPlaceholder"
+          :placeholder="nameMode === 'custom' ? '输入案例名称' : inputPlaceholder"
           maxlength="200"
         />
         <footer class="modal-foot">
@@ -144,10 +158,35 @@ function submit() {
   color: #6f6a63;
 }
 
+.modal-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.modal-mode {
+  appearance: none;
+  border: 1px solid #e3d9cc;
+  background: #fff;
+  color: #3b342c;
+  border-radius: 999px;
+  padding: 6px 11px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modal-mode.active {
+  border-color: #1f1f1f;
+  background: #1f1f1f;
+  color: #fff;
+}
+
 .modal-input {
   display: block;
   width: 100%;
-  margin-top: 14px;
+  margin-top: 12px;
   padding: 11px 12px;
   border: 1px solid #ddd4c8;
   border-radius: 12px;

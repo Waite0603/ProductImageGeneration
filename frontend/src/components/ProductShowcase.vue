@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import yellow from '../assets/shoes/yellow.png'
 import ImageCropDialog from './ImageCropDialog.vue'
 import AppModal from './AppModal.vue'
+import { DEFAULT_THEME_ID, THEME_MAP, resolveThemeId } from '../themes'
 
 /** Display max ~520px; export uses 2x for sharpness */
 const HERO_OUTPUT_WIDTH = 1040
@@ -16,9 +17,15 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  themeId: {
+    type: String,
+    default: DEFAULT_THEME_ID,
+  },
 })
 
-const emit = defineEmits(['update:activeId', 'change'])
+const emit = defineEmits(['update:activeId', 'update:themeId', 'change'])
+
+const resolvedThemeId = computed(() => resolveThemeId(props.themeId))
 
 let idSeq = 0
 function createId(prefix = 'color') {
@@ -281,7 +288,7 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => [props.editing, content.showFormulaBlock, content.showFormulaMath, content.fontSizes],
+  () => [props.editing, props.themeId, content.showFormulaBlock, content.showFormulaMath, content.fontSizes],
   () => nextTick(scheduleOverflowCheck),
   { deep: true },
 )
@@ -347,6 +354,7 @@ function flushEditableContent(blurActive = true) {
 function getSnapshot() {
   const data = clone({
     activeId: props.activeId,
+    themeId: resolvedThemeId.value,
     variants: variants.value,
     content,
   })
@@ -354,9 +362,18 @@ function getSnapshot() {
   return data
 }
 
+function adoptTheme(fromId, toId) {
+  const next = THEME_MAP[resolveThemeId(toId)]
+  if (!next) return
+  const prev = THEME_MAP[fromId]
+  if (!prev || content.stageBg === prev.stageBg) content.stageBg = next.stageBg
+  if (!prev || content.thumbBg === prev.thumbBg) content.thumbBg = next.thumbBg
+}
+
 function resetToDefault() {
   applySnapshot({
     activeId: 'yellow',
+    themeId: DEFAULT_THEME_ID,
     variants: DEFAULT_VARIANTS.map((item) => ({ ...item })),
     content: clone(DEFAULT_CONTENT),
   })
@@ -388,6 +405,8 @@ function applySnapshot(data) {
     emit('update:activeId', variants.value[0].id)
   }
 
+  emit('update:themeId', resolveThemeId(data.themeId))
+
   nextTick(() => {
     applyingSnapshot = false
     scheduleOverflowCheck()
@@ -395,14 +414,14 @@ function applySnapshot(data) {
 }
 
 watch(
-  () => [props.activeId, variants.value, content],
+  () => [props.activeId, props.themeId, variants.value, content],
   () => {
     if (!applyingSnapshot) emit('change')
   },
   { deep: true },
 )
 
-defineExpose({ flushEditableContent, getSnapshot, applySnapshot, resetToDefault })
+defineExpose({ flushEditableContent, getSnapshot, applySnapshot, resetToDefault, adoptTheme })
 
 function placeCaretAfter(node) {
   const sel = window.getSelection()
@@ -578,7 +597,7 @@ function removeVariant(variantId) {
   <article
     ref="boardEl"
     class="board"
-    :class="{ 'is-editing': editing }"
+    :class="[`theme-${resolvedThemeId}`, { 'is-editing': editing }]"
     :style="boardStyle"
     @paste="onPastePlain"
     @focusin="onBoardFocusIn"
@@ -630,7 +649,10 @@ function removeVariant(variantId) {
     </div>
 
     <section class="visual">
-      <div class="stage">
+      <div
+        class="stage"
+        :style="{ backgroundColor: content.stageBg }"
+      >
         <label v-if="editing" class="bg-picker stage-bg-picker" title="主图区背景色">
           <span>主图底色</span>
           <input v-model="content.stageBg" type="color" />
@@ -697,6 +719,7 @@ function removeVariant(variantId) {
             role="tab"
             class="thumb"
             :class="{ active: item.id === active.id }"
+            :style="{ backgroundColor: content.thumbBg }"
             :aria-selected="item.id === active.id"
             :title="item.name"
             @click="selectVariant(item.id)"
@@ -1017,26 +1040,62 @@ function removeVariant(variantId) {
   --ink: #1a1a1a;
   --muted: #8a857e;
   --line: #e6e1da;
-  --panel: #f3efe9;
   --chip: #9a6b52;
-  --card: #fbfaf8;
+  --chip-fg: #fff;
+  --chip-border: none;
+  --chip-shadow: 0 8px 18px rgba(154, 107, 82, 0.28);
+  --accent-hot: #c45c4a;
+  --price-bg: #222;
+  --price-fg: #fff;
+  --price-border: none;
+  --price-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  --price-radius: 12px;
+  --formula-bg: #2a2a2a;
+  --formula-fg: #fff;
+  --formula-muted: rgba(255, 255, 255, 0.72);
+  --num-bg: #3a3a3a;
+  --num-fg: #fff;
+  --num-highlight-bg: #4a4038;
+  --num-highlight-ring: rgba(201, 162, 39, 0.35);
+  --op-fg: rgba(255, 255, 255, 0.55);
+  --specs-bg: rgba(255, 255, 255, 0.45);
+  --specs-radius: 12px;
+  --board-radius: 18px;
+  --stage-radius: 16px;
+  --thumb-radius: 12px;
+  --formula-radius: 14px;
+  --chip-radius: 999px;
+  --thumb-active: #c45c4a;
+  --display-font: inherit;
+  --info-bg: transparent;
+  --info-pad: 4px 2px 0;
+  --divider: linear-gradient(90deg, var(--line), transparent 95%);
+  --board-pad: clamp(18px, 2vw, 28px);
+  --board-gap: clamp(18px, 2.2vw, 32px);
+  --visual-pad: 0;
+  --thumbs-pad: 0;
+  --formula-bleed: 0px;
+  --edit-line: rgba(196, 92, 74, 0.55);
   --stage-bg: #ffffff;
   --thumb-bg: #ffffff;
+  --board-solid: #f7f4ef;
 
   display: grid;
   grid-template-columns: 1.05fr 1fr;
-  gap: clamp(18px, 2.2vw, 32px);
+  gap: var(--board-gap);
   width: 100%;
   height: 100%;
   aspect-ratio: 16 / 9;
-  padding: clamp(18px, 2vw, 28px);
+  padding: var(--board-pad);
   box-sizing: border-box;
   background: linear-gradient(145deg, #f7f4ef 0%, #f0ebe3 55%, #ebe4db 100%);
-  border-radius: 18px;
+  border-radius: var(--board-radius);
   overflow: hidden;
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.7) inset,
     0 24px 60px rgba(40, 30, 20, 0.12);
+  font-family: inherit;
+  color: var(--ink);
 }
 
 .visual {
@@ -1044,13 +1103,14 @@ function removeVariant(variantId) {
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+  padding: var(--visual-pad);
 }
 
 .stage {
   position: relative;
   flex: 1;
   background: var(--stage-bg);
-  border-radius: 16px;
+  border-radius: var(--stage-radius);
   overflow: hidden;
   min-height: 0;
 }
@@ -1089,10 +1149,11 @@ function removeVariant(variantId) {
   align-items: flex-start;
   gap: 2px;
   padding: 10px 14px 12px;
-  background: #222;
-  color: #fff;
-  border-radius: 12px;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  background: var(--price-bg);
+  color: var(--price-fg);
+  border: var(--price-border);
+  border-radius: var(--price-radius);
+  box-shadow: var(--price-shadow);
 }
 
 .price-label {
@@ -1116,12 +1177,13 @@ function removeVariant(variantId) {
   z-index: 2;
   padding: 8px 14px;
   background: var(--chip);
-  color: #fff;
-  border-radius: 999px;
+  color: var(--chip-fg);
+  border: var(--chip-border);
+  border-radius: var(--chip-radius);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  box-shadow: 0 8px 18px rgba(154, 107, 82, 0.28);
+  box-shadow: var(--chip-shadow);
 }
 
 .thumbs {
@@ -1130,6 +1192,7 @@ function removeVariant(variantId) {
   flex-wrap: wrap;
   gap: 10px;
   align-items: flex-start;
+  padding: var(--thumbs-pad);
 }
 
 .thumb-wrap {
@@ -1142,7 +1205,7 @@ function removeVariant(variantId) {
   appearance: none;
   border: 2px solid transparent;
   background: var(--thumb-bg);
-  border-radius: 12px;
+  border-radius: var(--thumb-radius);
   padding: 4px;
   cursor: pointer;
   width: 96px;
@@ -1161,9 +1224,9 @@ function removeVariant(variantId) {
   height: 96px;
   display: grid;
   place-items: center;
-  border: 2px dashed rgba(196, 92, 74, 0.55);
+  border: 2px dashed color-mix(in srgb, var(--accent-hot) 55%, transparent);
   background: rgba(255, 255, 255, 0.65);
-  color: #c45c4a;
+  color: var(--accent-hot);
 }
 
 .thumb-add span {
@@ -1186,15 +1249,16 @@ function removeVariant(variantId) {
 }
 
 .thumb.active {
-  border-color: #c45c4a;
-  box-shadow: 0 0 0 1px rgba(196, 92, 74, 0.15);
+  border-color: var(--thumb-active);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--thumb-active) 15%, transparent);
 }
 
 .info {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: 4px 2px 0;
+  padding: var(--info-pad);
+  background: var(--info-bg);
 }
 
 .brand-row {
@@ -1206,6 +1270,7 @@ function removeVariant(variantId) {
 
 .brand h1 {
   margin: 0;
+  font-family: var(--display-font);
   font-size: clamp(28px, 2.8vw, 40px);
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -1244,11 +1309,12 @@ function removeVariant(variantId) {
 .divider {
   height: 1px;
   margin: 16px 0 18px;
-  background: linear-gradient(90deg, var(--line), transparent 95%);
+  background: var(--divider);
 }
 
 .title-block h2 {
   margin: 0;
+  font-family: var(--display-font);
   font-size: clamp(20px, 2.1vw, 28px);
   font-weight: 800;
   color: var(--ink);
@@ -1283,24 +1349,24 @@ function removeVariant(variantId) {
   width: 3px;
   height: 14px;
   border-radius: 2px;
-  background: #c45c4a;
+  background: var(--accent-hot);
 }
 
 .specs-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--specs-radius);
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--specs-bg);
 }
 
 .spec-add-btn {
   appearance: none;
   margin-left: auto;
-  border: 1px dashed rgba(196, 92, 74, 0.55);
+  border: 1px dashed color-mix(in srgb, var(--accent-hot) 55%, transparent);
   background: rgba(255, 255, 255, 0.75);
-  color: #c45c4a;
+  color: var(--accent-hot);
   border-radius: 999px;
   padding: 3px 10px;
   font-size: 11px;
@@ -1386,10 +1452,13 @@ function removeVariant(variantId) {
   justify-content: space-between;
   gap: 16px;
   margin-top: 16px;
+  margin-left: var(--formula-bleed);
+  margin-right: var(--formula-bleed);
+  width: calc(100% - var(--formula-bleed) * 2);
   padding: 16px 18px;
-  background: #2a2a2a;
-  color: #fff;
-  border-radius: 14px;
+  background: var(--formula-bg);
+  color: var(--formula-fg);
+  border-radius: var(--formula-radius);
 }
 
 .formula--no-math {
@@ -1429,9 +1498,9 @@ function removeVariant(variantId) {
   appearance: none;
   align-self: flex-start;
   margin-top: 16px;
-  border: 1px dashed rgba(196, 92, 74, 0.55);
+  border: 1px dashed color-mix(in srgb, var(--accent-hot) 55%, transparent);
   background: rgba(255, 255, 255, 0.65);
-  color: #1a1a1a;
+  color: var(--ink);
   border-radius: 999px;
   padding: 8px 14px;
   font-size: 12px;
@@ -1459,7 +1528,7 @@ function removeVariant(variantId) {
   margin: 8px 0 0;
   font-size: 11px;
   line-height: 1.6;
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--formula-muted);
 }
 
 .formula-line {
@@ -1477,13 +1546,14 @@ function removeVariant(variantId) {
   min-width: 52px;
   padding: 8px 10px;
   text-align: center;
-  background: #3a3a3a;
+  background: var(--num-bg);
+  color: var(--num-fg);
   border-radius: 10px;
 }
 
 .num-box.highlight {
-  background: #4a4038;
-  outline: 1px solid rgba(201, 162, 39, 0.35);
+  background: var(--num-highlight-bg);
+  outline: 1px solid var(--num-highlight-ring);
 }
 
 .num-box strong {
@@ -1497,14 +1567,14 @@ function removeVariant(variantId) {
   display: block;
   margin-top: 4px;
   font-size: 9px;
-  color: rgba(255, 255, 255, 0.65);
+  color: color-mix(in srgb, var(--num-fg) 65%, transparent);
   letter-spacing: 0.02em;
 }
 
 .op {
   font-size: 18px;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--op-fg);
 }
 
 .bg-picker {
@@ -1516,7 +1586,7 @@ function removeVariant(variantId) {
   padding: 4px 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(196, 92, 74, 0.45);
+  border: 1px solid color-mix(in srgb, var(--accent-hot) 45%, transparent);
   box-shadow: 0 4px 12px rgba(40, 30, 20, 0.1);
   font-size: 11px;
   font-weight: 600;
@@ -1567,7 +1637,7 @@ function removeVariant(variantId) {
 
 .img-action {
   appearance: none;
-  border: 1px solid rgba(196, 92, 74, 0.5);
+  border: 1px solid color-mix(in srgb, var(--accent-hot) 50%, transparent);
   background: rgba(255, 255, 255, 0.94);
   color: #1a1a1a;
   border-radius: 999px;
@@ -1605,7 +1675,7 @@ function removeVariant(variantId) {
   padding: 6px 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(196, 92, 74, 0.55);
+  border: 1px solid color-mix(in srgb, var(--accent-hot) 55%, transparent);
   box-shadow: 0 8px 24px rgba(40, 30, 20, 0.14);
   font-size: 12px;
   color: #1a1a1a;
@@ -1632,7 +1702,7 @@ function removeVariant(variantId) {
 
 .fs-btn:hover {
   background: #fff;
-  border-color: #c45c4a;
+  border-color: var(--accent-hot);
 }
 
 .fs-input {
@@ -1665,7 +1735,7 @@ function removeVariant(variantId) {
   appearance: none;
   border: none;
   background: transparent;
-  color: #c45c4a;
+  color: var(--accent-hot);
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
@@ -1690,19 +1760,463 @@ function removeVariant(variantId) {
 /* Edit mode: outline only */
 .board.is-editing [contenteditable='true'] {
   cursor: text;
-  outline: 1px dashed rgba(196, 92, 74, 0.55);
+  outline: 1px dashed var(--edit-line);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
 .board.is-editing [contenteditable='true']:focus {
-  outline: 1px solid rgba(196, 92, 74, 0.9);
-  background: rgba(196, 92, 74, 0.06);
+  outline: 1px solid color-mix(in srgb, var(--accent-hot) 90%, transparent);
+  background: color-mix(in srgb, var(--accent-hot) 8%, transparent);
 }
 
 .board.is-editing .feature-chip[contenteditable='true']:focus {
   color: #1a1a1a;
   background: #fff;
+}
+
+/* —— 夜宴：黑金时装 —— */
+.board.theme-noir {
+  --ink: #f3eadc;
+  --board-solid: #100e0c;
+  --muted: #9a9084;
+  --line: rgba(212, 175, 103, 0.22);
+  --chip: transparent;
+  --chip-fg: #d4af67;
+  --chip-border: 1px solid rgba(212, 175, 103, 0.7);
+  --chip-shadow: none;
+  --accent-hot: #d4af67;
+  --price-bg: #0c0b0a;
+  --price-fg: #e7c878;
+  --price-border: 1px solid rgba(212, 175, 103, 0.55);
+  --price-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  --price-radius: 2px;
+  --formula-bg: #0c0b0a;
+  --formula-fg: #f3eadc;
+  --formula-muted: rgba(243, 234, 220, 0.62);
+  --num-bg: #1c1916;
+  --num-fg: #f3eadc;
+  --num-highlight-bg: #2a2318;
+  --num-highlight-ring: rgba(212, 175, 103, 0.5);
+  --op-fg: rgba(212, 175, 103, 0.7);
+  --specs-bg: rgba(255, 255, 255, 0.03);
+  --specs-radius: 2px;
+  --board-radius: 10px;
+  --stage-radius: 4px;
+  --thumb-radius: 4px;
+  --formula-radius: 4px;
+  --chip-radius: 2px;
+  --thumb-active: #d4af67;
+  --edit-line: rgba(212, 175, 103, 0.55);
+  background:
+    radial-gradient(ellipse 70% 50% at 80% 0%, rgba(212, 175, 103, 0.08), transparent 50%),
+    linear-gradient(165deg, #1a1815 0%, #100e0c 100%);
+  box-shadow:
+    0 0 0 1px rgba(212, 175, 103, 0.22) inset,
+    0 28px 64px rgba(0, 0, 0, 0.4);
+}
+
+.board.theme-noir .brand h1,
+.board.theme-noir .title-block h2 {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.board.theme-noir .brand p {
+  letter-spacing: 0.28em;
+  color: #d4af67;
+}
+
+.board.theme-noir .specs-title i {
+  width: 18px;
+  height: 1px;
+  border-radius: 0;
+  background: #d4af67;
+}
+
+.board.theme-noir .thumb-add {
+  background: rgba(255, 255, 255, 0.04);
+  color: #d4af67;
+}
+
+.board.theme-noir.is-editing .feature-chip[contenteditable='true']:focus {
+  color: #d4af67;
+  background: #1c1a17;
+}
+
+/* —— 白场：极简展陈 —— */
+.board.theme-studio {
+  --ink: #111;
+  --board-solid: #f7f7f5;
+  --muted: #7a7a76;
+  --line: #e6e6e2;
+  --chip: #111;
+  --chip-fg: #fff;
+  --chip-shadow: none;
+  --accent-hot: #111;
+  --price-bg: #fff;
+  --price-fg: #111;
+  --price-border: 1px solid #111;
+  --price-shadow: none;
+  --price-radius: 2px;
+  --formula-bg: #f3f3f0;
+  --formula-fg: #111;
+  --formula-muted: #6a6a66;
+  --num-bg: #fff;
+  --num-fg: #111;
+  --num-highlight-bg: #111;
+  --num-highlight-ring: transparent;
+  --op-fg: #111;
+  --specs-bg: transparent;
+  --specs-radius: 0;
+  --board-radius: 6px;
+  --stage-radius: 0;
+  --thumb-radius: 2px;
+  --formula-radius: 0;
+  --chip-radius: 2px;
+  --thumb-active: #111;
+  --edit-line: rgba(17, 17, 17, 0.45);
+  --divider: #111;
+  background: #f7f7f5;
+  box-shadow: 0 0 0 1px #e4e4e0, 0 18px 40px rgba(20, 20, 18, 0.06);
+}
+
+.board.theme-studio .divider {
+  height: 2px;
+  width: 48px;
+  margin: 18px 0 20px;
+}
+
+.board.theme-studio .brand h1 {
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.board.theme-studio .title-block h2 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.board.theme-studio .specs-grid {
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.board.theme-studio .spec-cell {
+  border-right: none;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0 12px 2px;
+}
+
+.board.theme-studio .spec-cell:nth-child(odd) {
+  padding-right: 18px;
+}
+
+.board.theme-studio .spec-cell:nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+
+.board.theme-studio .specs-title i {
+  width: 12px;
+  height: 12px;
+  border-radius: 0;
+  background: #111;
+}
+
+.board.theme-studio .num-box.highlight {
+  color: #fff;
+}
+
+.board.theme-studio .num-box.highlight span {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.board.theme-studio .price-label {
+  opacity: 1;
+  color: #111;
+}
+
+.board.theme-studio .thumb-add {
+  background: #fff;
+  color: #111;
+  border-color: #111;
+}
+
+.board.theme-studio .formula-math-toggle,
+.board.theme-studio .formula-block-toggle {
+  border-color: rgba(17, 17, 17, 0.35);
+  background: rgba(17, 17, 17, 0.06);
+  color: #111;
+}
+
+/* —— 宣纸：东方水墨 —— */
+.board.theme-ink {
+  --ink: #1c1a17;
+  --board-solid: #f6efe3;
+  --muted: #8a7d6c;
+  --line: #d8ccb8;
+  --chip: transparent;
+  --chip-fg: #8c2f24;
+  --chip-border: 1px solid #8c2f24;
+  --chip-shadow: none;
+  --accent-hot: #8c2f24;
+  --price-bg: #b33328;
+  --price-fg: #f8efe4;
+  --price-shadow: none;
+  --price-radius: 3px;
+  --formula-bg: #1f1c18;
+  --formula-fg: #f4eadc;
+  --formula-muted: rgba(244, 234, 220, 0.7);
+  --num-bg: #2c2722;
+  --num-fg: #f4eadc;
+  --num-highlight-bg: #8c2f24;
+  --num-highlight-ring: transparent;
+  --op-fg: rgba(244, 234, 220, 0.5);
+  --specs-bg: rgba(255, 252, 246, 0.55);
+  --specs-radius: 0;
+  --board-radius: 4px;
+  --stage-radius: 2px;
+  --thumb-radius: 2px;
+  --formula-radius: 2px;
+  --chip-radius: 2px;
+  --thumb-active: #8c2f24;
+  --display-font: 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+  --edit-line: rgba(140, 47, 36, 0.55);
+  --divider: linear-gradient(90deg, #8c2f24, transparent 80%);
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(120, 90, 50, 0.03) 0 1px,
+      transparent 1px 5px
+    ),
+    linear-gradient(180deg, #f6efe3 0%, #eee2cf 100%);
+  box-shadow:
+    0 0 0 1px rgba(140, 110, 70, 0.18) inset,
+    0 22px 50px rgba(60, 42, 24, 0.12);
+}
+
+.board.theme-ink .price-tag {
+  top: 18px;
+  right: 18px;
+  min-width: 84px;
+  align-items: center;
+  text-align: center;
+  padding: 12px 10px 13px;
+  box-shadow:
+    0 0 0 2px #b33328,
+    0 0 0 4px var(--stage-bg),
+    0 0 0 5px #b33328;
+}
+
+.board.theme-ink .price-label {
+  letter-spacing: 0.18em;
+  opacity: 0.88;
+}
+
+.board.theme-ink .brand h1 {
+  font-weight: 900;
+  letter-spacing: 0.18em;
+}
+
+.board.theme-ink .title-block h2 {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.board.theme-ink .divider {
+  height: 2px;
+}
+
+.board.theme-ink .specs-grid {
+  border-style: double;
+  border-width: 3px;
+}
+
+.board.theme-ink .specs-title i {
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+  background: #8c2f24;
+}
+
+.board.theme-ink.is-editing .feature-chip[contenteditable='true']:focus {
+  color: #8c2f24;
+  background: #faf6ee;
+}
+
+/* —— 热卖：直播主推 —— */
+.board.theme-live {
+  --ink: #1a1a1a;
+  --board-solid: #fff8f4;
+  --muted: #8a7b74;
+  --line: #f0d9d0;
+  --chip: #e23c2f;
+  --chip-fg: #fff;
+  --chip-shadow: 0 8px 18px rgba(226, 60, 47, 0.28);
+  --accent-hot: #e23c2f;
+  --price-bg: #e23c2f;
+  --price-fg: #fff;
+  --price-shadow: 0 12px 24px rgba(226, 60, 47, 0.28);
+  --price-radius: 16px 4px 16px 4px;
+  --formula-bg: #1a1a1a;
+  --formula-fg: #fff;
+  --formula-muted: rgba(255, 255, 255, 0.72);
+  --num-bg: #2c2c2c;
+  --num-fg: #fff;
+  --num-highlight-bg: #e23c2f;
+  --num-highlight-ring: transparent;
+  --op-fg: rgba(255, 255, 255, 0.55);
+  --specs-bg: #fff;
+  --specs-radius: 16px;
+  --board-radius: 22px;
+  --stage-radius: 20px;
+  --thumb-radius: 16px;
+  --formula-radius: 18px;
+  --chip-radius: 999px;
+  --thumb-active: #e23c2f;
+  --edit-line: rgba(226, 60, 47, 0.55);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(226, 60, 47, 0.1), transparent 32%),
+    linear-gradient(145deg, #fff8f4 0%, #ffe9df 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.85) inset,
+    0 24px 60px rgba(180, 60, 40, 0.12);
+}
+
+.board.theme-live .price-tag {
+  padding: 12px 16px 14px;
+}
+
+.board.theme-live .price-value {
+  font-weight: 800;
+}
+
+.board.theme-live .specs-title i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.board.theme-live .dot {
+  background: #e23c2f;
+}
+
+.board.theme-live .brand h1 {
+  letter-spacing: 0.02em;
+}
+
+/* —— 刊页：杂志对开 —— */
+.board.theme-folio {
+  --ink: #2c241c;
+  --board-solid: #ffffff;
+  --muted: #8a7d6e;
+  --line: #ddd3c6;
+  --chip: #2c241c;
+  --chip-fg: #f6efe6;
+  --chip-shadow: none;
+  --chip-radius: 0;
+  --accent-hot: #c4a574;
+  --price-bg: #2c241c;
+  --price-fg: #f6efe6;
+  --price-shadow: none;
+  --price-radius: 0;
+  --formula-bg: #2c241c;
+  --formula-fg: #f6efe6;
+  --formula-muted: rgba(246, 239, 230, 0.68);
+  --num-bg: #3a3228;
+  --num-fg: #f6efe6;
+  --num-highlight-bg: #c4a574;
+  --num-highlight-ring: transparent;
+  --op-fg: rgba(246, 239, 230, 0.5);
+  --specs-bg: transparent;
+  --specs-radius: 0;
+  --board-radius: 8px;
+  --stage-radius: 0;
+  --thumb-radius: 0;
+  --formula-radius: 0;
+  --thumb-active: #2c241c;
+  --display-font: 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+  --info-bg: #f3ece1;
+  --info-pad: 28px 30px 0;
+  --board-pad: 0;
+  --board-gap: 0;
+  --visual-pad: 0 0 16px;
+  --thumbs-pad: 0 16px;
+  --formula-bleed: -30px;
+  --edit-line: rgba(44, 36, 28, 0.45);
+  --divider: #2c241c;
+  gap: 0;
+  padding: 0;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(40, 30, 20, 0.14);
+}
+
+.board.theme-folio .visual {
+  background: #fff;
+}
+
+.board.theme-folio .price-tag {
+  top: 0;
+  right: 0;
+  padding: 14px 18px 16px;
+}
+
+.board.theme-folio .feature-chip {
+  left: 0;
+  bottom: 0;
+  border-radius: 0;
+}
+
+.board.theme-folio .divider {
+  height: 2px;
+  width: 56px;
+  margin: 16px 0 18px;
+}
+
+.board.theme-folio .brand h1 {
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.board.theme-folio .title-block h2 {
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.board.theme-folio .specs-grid {
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+.board.theme-folio .spec-cell {
+  border-right: none;
+  padding-left: 0;
+}
+
+.board.theme-folio .spec-cell:nth-child(odd) {
+  padding-right: 20px;
+}
+
+.board.theme-folio .specs-title i {
+  width: 22px;
+  height: 1px;
+  border-radius: 0;
+  background: #2c241c;
+}
+
+.board.theme-folio .num-box.highlight {
+  color: #2c241c;
+}
+
+.board.theme-folio .num-box.highlight span {
+  color: rgba(44, 36, 28, 0.7);
+}
+
+.board.theme-folio .thumb-add {
+  background: #fff;
+  color: #2c241c;
+  border-color: #2c241c;
 }
 
 @media (max-width: 900px) {

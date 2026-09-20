@@ -3,8 +3,10 @@ import { onBeforeUnmount, onMounted, reactive, ref, nextTick, watch } from 'vue'
 import { domToCanvas } from 'modern-screenshot'
 import ProductShowcase from './components/ProductShowcase.vue'
 import AppModal from './components/AppModal.vue'
+import { DEFAULT_THEME_ID, THEME_MAP, THEMES, resolveThemeId } from './themes'
 
 const activeId = ref('yellow')
+const themeId = ref(DEFAULT_THEME_ID)
 const boardRef = ref(null)
 const stageWrapRef = ref(null)
 const showcaseRef = ref(null)
@@ -58,6 +60,22 @@ function toggleEditing() {
     persistCurrentCase()
   }
   editing.value = !editing.value
+}
+
+function clearBoardGapLocks() {
+  const board = boardRef.value?.querySelector('.board')
+  if (!(board instanceof HTMLElement)) return
+  board.style.gap = ''
+  board.style.columnGap = ''
+  board.style.rowGap = ''
+}
+
+function onSelectTheme(id) {
+  const next = resolveThemeId(id)
+  if (next === themeId.value) return
+  showcaseRef.value?.adoptTheme?.(themeId.value, next)
+  themeId.value = next
+  nextTick(clearBoardGapLocks)
 }
 
 function pad(n) {
@@ -244,8 +262,45 @@ const modal = reactive({
   cancelText: '取消',
   hideCancel: false,
   danger: false,
+  nameModes: [],
+  nameMode: '',
 })
 let modalDone = null
+let pendingSaveSnapshot = null
+
+const NAME_MODE_KEY = 'showcase-history-name-mode'
+const NAME_MODES = [
+  { id: 'style', label: '款号 + 时间' },
+  { id: 'current', label: '产品名 + 时间' },
+]
+
+function readNameMode() {
+  try {
+    const saved = localStorage.getItem(NAME_MODE_KEY)
+    if (NAME_MODES.some((item) => item.id === saved)) return saved
+  } catch {
+    /* ignore */
+  }
+  return 'style'
+}
+
+function writeNameMode(mode) {
+  try {
+    localStorage.setItem(NAME_MODE_KEY, mode)
+  } catch {
+    /* ignore */
+  }
+}
+
+function historyNameByMode(mode, snapshot) {
+  const time = formatTime()
+  const styleNo = String(snapshot?.content?.styleNo || '').trim() || '款号'
+  const title = String(snapshot?.content?.title || '').trim() || '展示'
+  if (mode === 'style') return `${styleNo} ${time}`
+  if (mode === 'custom') return ''
+  if (currentCase.value?.name) return `${currentCase.value.name} 副本`
+  return `${title} ${time}`
+}
 
 function showModal(opts) {
   Object.assign(modal, {
@@ -257,6 +312,8 @@ function showModal(opts) {
     cancelText: '取消',
     hideCancel: false,
     danger: false,
+    nameModes: [],
+    nameMode: '',
     ...opts,
     open: true,
   })
@@ -353,22 +410,30 @@ async function startNewCase() {
   skipAutoSave = false
 }
 
+function onNameModeChange(mode) {
+  modal.nameMode = mode
+  writeNameMode(mode)
+  modal.inputValue = historyNameByMode(mode, pendingSaveSnapshot)
+}
+
 async function createHistoryRecord() {
   const snapshot = await getBoardSnapshot()
   if (!snapshot) {
     await notice('无法保存', '读不到当前画板数据')
     return
   }
-  const fallback = currentCase.value?.name
-    ? `${currentCase.value.name} 副本`
-    : `${snapshot.content?.title || '展示'} ${formatTime()}`
+  const nameMode = readNameMode()
+  pendingSaveSnapshot = snapshot
   const name = await showModal({
     title: '保存到历史',
     message: '当前画板会存成一条新的历史记录，不会覆盖已打开的案例。',
     input: true,
-    inputValue: fallback,
+    inputValue: historyNameByMode(nameMode, snapshot),
+    nameModes: NAME_MODES,
+    nameMode,
     confirmText: '创建',
   })
+  pendingSaveSnapshot = null
   if (name == null) return
   historyBusy.value = true
   try {
@@ -514,9 +579,29 @@ const TEXT_LOCK_SELECTORS = [
   '.price-value',
   '.feature-chip',
   '.formula-copy h3',
-  '.formula-copy p',
+  '.formula-line',
   '.num-box strong',
   '.num-box span',
+  '[data-sync]',
+]
+
+const LAYOUT_STYLE_PROPS = [
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+  'columnGap',
+  'rowGap',
+]
+
+const FONT_STYLE_PROPS = [
+  'fontSize',
+  'lineHeight',
+  'letterSpacing',
+  'wordSpacing',
+  'fontFamily',
+  'fontWeight',
+  'fontStyle',
 ]
 
 function waitForImages(root) {
@@ -531,56 +616,151 @@ function waitForImages(root) {
   )
 }
 
-/** Lock live text box size so screenshot matches on-screen wrap behavior */
-function lockTextMetrics(root) {
-  const locked = []
+function collectLockElements(root) {
+  const els = new Set()
   for (const sel of TEXT_LOCK_SELECTORS) {
     root.querySelectorAll(sel).forEach((el) => {
-      if (!(el instanceof HTMLElement)) return
-      const rect = el.getBoundingClientRect()
-      const styles = getComputedStyle(el)
-      const fontSize = parseFloat(styles.fontSize) || 14
-      const lineHeight =
-        styles.lineHeight === 'normal'
-          ? fontSize * 1.2
-          : parseFloat(styles.lineHeight) || fontSize * 1.2
-      const hasBreak = (el.innerText || '').includes('\n')
-      // Multi-line on screen → keep wrapping; single-line → prevent clone wrap drift
-      const isWrapped = hasBreak || el.scrollHeight > lineHeight * 1.6
-
-      locked.push({
-        el,
-        whiteSpace: el.style.whiteSpace,
-        minWidth: el.style.minWidth,
-        maxWidth: el.style.maxWidth,
-        width: el.style.width,
-        boxSizing: el.style.boxSizing,
-      })
-
-      const w = Math.max(1, Math.ceil(el.offsetWidth))
-      el.style.boxSizing = 'border-box'
-
-      if (isWrapped) {
-        // Preserve the same wrap width as HTML (do NOT force nowrap)
-        el.style.width = `${w}px`
-        el.style.maxWidth = `${w}px`
-        el.style.minWidth = `${w}px`
-        el.style.whiteSpace = styles.whiteSpace === 'nowrap' ? 'normal' : styles.whiteSpace
-      } else {
-        // Single line on screen: stop export from wrapping early
-        el.style.whiteSpace = 'nowrap'
-        el.style.minWidth = `${w + 1}px`
-        el.style.maxWidth = 'none'
-      }
+      if (el instanceof HTMLElement) els.add(el)
     })
   }
+  return [...els]
+}
+
+function freezeStyleProps(el, propNames) {
+  const styles = getComputedStyle(el)
+  const prev = {}
+  for (const name of propNames) {
+    prev[name] = el.style[name]
+  }
+  for (const name of propNames) {
+    const value = styles[name]
+    if (value) el.style[name] = value
+  }
   return () => {
-    locked.forEach(({ el, whiteSpace, minWidth, maxWidth, width, boxSizing }) => {
-      el.style.whiteSpace = whiteSpace
-      el.style.minWidth = minWidth
-      el.style.maxWidth = maxWidth
-      el.style.width = width
-      el.style.boxSizing = boxSizing
+    for (const name of propNames) el.style[name] = prev[name]
+  }
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** 按页面上真实视觉行拆分，避免截图克隆时因字体度量差 1px 而提前换行 */
+function readVisualLines(el) {
+  const nodes = []
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  while (walker.nextNode()) nodes.push(walker.currentNode)
+  if (!nodes.length) return [(el.innerText || '').replace(/\n+$/, '')]
+
+  const styles = getComputedStyle(el)
+  const fontSize = parseFloat(styles.fontSize) || 14
+  const lineHeight =
+    styles.lineHeight === 'normal'
+      ? fontSize * 1.2
+      : parseFloat(styles.lineHeight) || fontSize * 1.2
+  const threshold = Math.max(2, lineHeight * 0.45)
+
+  const lines = []
+  let current = ''
+  let lastTop = null
+
+  for (const node of nodes) {
+    const text = node.nodeValue || ''
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i]
+      if (ch === '\n') {
+        lines.push(current)
+        current = ''
+        lastTop = null
+        continue
+      }
+      const range = document.createRange()
+      range.setStart(node, i)
+      range.setEnd(node, i + 1)
+      const rect = range.getBoundingClientRect()
+      if (!rect.height) {
+        current += ch
+        continue
+      }
+      if (lastTop !== null && rect.top - lastTop > threshold) {
+        lines.push(current)
+        current = ch
+      } else {
+        current += ch
+      }
+      lastTop = rect.top
+    }
+  }
+  lines.push(current)
+  while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  return lines.length ? lines : ['']
+}
+
+/** 先把 vw/clamp 算出来的字号和间距冻成 px，避免导出时视口变化导致回流 */
+function freezeLayoutMetrics(root) {
+  const restorers = [freezeStyleProps(root, LAYOUT_STYLE_PROPS)]
+  collectLockElements(root).forEach((el) => {
+    restorers.push(freezeStyleProps(el, FONT_STYLE_PROPS))
+  })
+  return () => {
+    for (let i = restorers.length - 1; i >= 0; i -= 1) restorers[i]()
+  }
+}
+
+/** 把页面上的换行点写成 <br>，截图克隆就无法再自行折行 */
+function lockLineBreaks(root) {
+  const locked = []
+  collectLockElements(root).forEach((el) => {
+    const prev = {
+      whiteSpace: el.style.whiteSpace,
+      minWidth: el.style.minWidth,
+      maxWidth: el.style.maxWidth,
+      width: el.style.width,
+      boxSizing: el.style.boxSizing,
+      overflow: el.style.overflow,
+      wordBreak: el.style.wordBreak,
+      overflowWrap: el.style.overflowWrap,
+      innerHTML: el.innerHTML,
+    }
+    locked.push({ el, ...prev })
+
+    const lines = readVisualLines(el)
+    const w = Math.max(1, Math.ceil(el.offsetWidth))
+    el.style.boxSizing = 'border-box'
+    el.style.overflow = 'visible'
+    el.style.wordBreak = 'keep-all'
+    el.style.overflowWrap = 'normal'
+    el.style.maxWidth = 'none'
+
+    if (lines.length > 1) {
+      if (el.childElementCount === 0) {
+        el.innerHTML = lines.map(escapeHtml).join('<br>')
+      }
+      el.style.whiteSpace = 'nowrap'
+      el.style.width = `${w}px`
+      el.style.minWidth = `${w}px`
+    } else {
+      el.style.whiteSpace = 'nowrap'
+      el.style.minWidth = `${w + 4}px`
+    }
+  })
+
+  return () => {
+    locked.forEach((item) => {
+      const { el } = item
+      el.style.whiteSpace = item.whiteSpace
+      el.style.minWidth = item.minWidth
+      el.style.maxWidth = item.maxWidth
+      el.style.width = item.width
+      el.style.boxSizing = item.boxSizing
+      el.style.overflow = item.overflow
+      el.style.wordBreak = item.wordBreak
+      el.style.overflowWrap = item.overflowWrap
+      if (el.innerHTML !== item.innerHTML) el.innerHTML = item.innerHTML
     })
   }
 }
@@ -593,7 +773,7 @@ async function renderPromoPng() {
   const wasEditing = editing.value
   const prevScale = viewScale.value
   editing.value = false
-  viewScale.value = 1
+  let unfreezeLayout = null
   let unlock = null
   try {
     await nextTick()
@@ -601,7 +781,12 @@ async function renderPromoPng() {
     await waitForImages(board)
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
 
-    unlock = lockTextMetrics(board)
+    unfreezeLayout = freezeLayoutMetrics(board)
+    viewScale.value = 1
+    await nextTick()
+    await new Promise((r) => requestAnimationFrame(r))
+
+    unlock = lockLineBreaks(board)
     await nextTick()
     await new Promise((r) => requestAnimationFrame(r))
 
@@ -611,11 +796,15 @@ async function renderPromoPng() {
     const targetHeight = 1080
     const exportScale = Math.min(3, Math.max(2, targetWidth / width))
 
+    const backdrop =
+      getComputedStyle(board).getPropertyValue('--board-solid').trim() ||
+      THEME_MAP[resolveThemeId(themeId.value)]?.boardSolid ||
+      '#f7f4ef'
+
     const captured = await domToCanvas(board, {
       width,
       height,
       scale: exportScale,
-      backgroundColor: '#f7f4ef',
       style: {
         margin: '0',
         transform: 'none',
@@ -634,7 +823,7 @@ async function renderPromoPng() {
     const ctx = out.getContext('2d')
     ctx.imageSmoothingEnabled = true
     ctx.imageSmoothingQuality = 'high'
-    ctx.fillStyle = '#f7f4ef'
+    ctx.fillStyle = backdrop
     ctx.fillRect(0, 0, targetWidth, targetHeight)
 
     const ratio = Math.min(targetWidth / captured.width, targetHeight / captured.height)
@@ -649,6 +838,8 @@ async function renderPromoPng() {
     return out.toDataURL('image/png')
   } finally {
     unlock?.()
+    unfreezeLayout?.()
+    clearBoardGapLocks()
     viewScale.value = prevScale
     editing.value = wasEditing
   }
@@ -759,6 +950,31 @@ function confirmDownload() {
       </div>
     </header>
 
+    <nav class="theme-bar" aria-label="画板样式">
+      <span class="theme-bar-kicker">LOOK</span>
+      <button
+        v-for="theme in THEMES"
+        :key="theme.id"
+        type="button"
+        class="theme-pill"
+        :class="{ active: themeId === theme.id }"
+        :title="theme.desc"
+        @click="onSelectTheme(theme.id)"
+      >
+        <span class="theme-dots" aria-hidden="true">
+          <i
+            v-for="(color, index) in theme.swatch"
+            :key="index"
+            :style="{ background: color }"
+          />
+        </span>
+        <span class="theme-copy">
+          <strong>{{ theme.name }}</strong>
+          <em>{{ theme.desc }}</em>
+        </span>
+      </button>
+    </nav>
+
     <div
       v-if="historyOpen"
       class="history-mask"
@@ -863,6 +1079,9 @@ function confirmDownload() {
       :cancel-text="modal.cancelText"
       :hide-cancel="modal.hideCancel"
       :danger="modal.danger"
+      :name-modes="modal.nameModes"
+      :name-mode="modal.nameMode"
+      @update:name-mode="onNameModeChange"
       @close="finishModal(null)"
       @confirm="finishModal"
     />
@@ -884,6 +1103,7 @@ function confirmDownload() {
           <ProductShowcase
             ref="showcaseRef"
             v-model:active-id="activeId"
+            v-model:theme-id="themeId"
             :editing="editing"
             @change="onBoardChange"
           />
@@ -915,8 +1135,8 @@ function confirmDownload() {
         viewScale < 0.995
           ? '屏幕放不下完整画布，已按 16:9 缩小显示。可用预览查看 1920×1080 成品。'
           : editing
-            ? '编辑模式：可改文字 · 可调字号 · 底部信息块可隐藏/显示 · 缩略图可传图/删除/新增'
-            : '画布固定 16:9 · 导出尺寸 1920×1080'
+            ? '编辑模式：可改文字 · 可调字号 · 可切换样式 · 底部信息块可隐藏/显示 · 缩略图可传图/删除/新增'
+            : '画布固定 16:9 · 导出尺寸 1920×1080 · 可切换多种画板样式'
       }}
     </p>
 
@@ -999,7 +1219,89 @@ function confirmDownload() {
   justify-content: space-between;
   gap: 12px 16px;
   max-width: 1200px;
-  margin: 0 auto 22px;
+  margin: 0 auto 14px;
+}
+
+.theme-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 1200px;
+  margin: 0 auto 18px;
+}
+
+.theme-bar-kicker {
+  margin-right: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: #8a857e;
+}
+
+.theme-pill {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 999px;
+  border: 1px solid #d9cfc2;
+  background: rgba(255, 255, 255, 0.82);
+  color: #3b342c;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.theme-pill:hover {
+  border-color: #b7a894;
+  transform: translateY(-1px);
+}
+
+.theme-pill.active {
+  border-color: #1f1f1f;
+  background: #1f1f1f;
+  color: #fff;
+}
+
+.theme-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.theme-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.theme-pill.active .theme-dots i {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
+
+.theme-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+
+.theme-copy strong {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.theme-copy em {
+  font-size: 10px;
+  font-style: normal;
+  opacity: 0.72;
+  letter-spacing: 0.02em;
 }
 
 .toolbar-text {
@@ -1746,6 +2048,14 @@ function confirmDownload() {
   .toolbar-actions {
     flex-basis: 100%;
     justify-content: flex-start;
+  }
+
+  .theme-bar-kicker {
+    width: 100%;
+  }
+
+  .theme-copy em {
+    display: none;
   }
 }
 </style>
