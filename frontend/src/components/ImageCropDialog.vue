@@ -375,16 +375,21 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: 9999;
-  display: grid;
-  place-items: center;
-  padding: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: auto;
   background: rgba(28, 22, 16, 0.5);
   backdrop-filter: blur(8px);
   box-sizing: border-box;
 }
 
 .crop-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(920px, 100%);
+  max-height: calc(100dvh - 16px);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.32)),
     #f7f4ef;
@@ -402,6 +407,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 16px;
   padding: 20px 22px 10px;
+  flex-shrink: 0;
 }
 
 .crop-kicker {
@@ -450,6 +456,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 0 22px 14px;
+  flex-shrink: 0;
 }
 
 .ratio-btn {
@@ -515,7 +522,9 @@ onBeforeUnmount(() => {
 
 .crop-stage {
   position: relative;
-  height: min(58vh, 480px);
+  flex: 1 1 auto;
+  min-height: 120px;
+  height: min(42dvh, 480px);
   margin: 0 22px;
   background: #1f1f1f;
   border-radius: 12px;
@@ -566,7 +575,8 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding: 16px 22px 18px;
+  padding: 12px 22px 14px;
+  flex-shrink: 0;
 }
 
 .btn {
@@ -601,5 +611,34 @@ onBeforeUnmount(() => {
 
 .btn.primary:hover:not(:disabled) {
   background: #333;
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .crop-dialog {
+    max-height: calc(100dvh - 8px);
+    border-radius: 16px;
+  }
+
+  .crop-header {
+    padding: 10px 16px 6px;
+  }
+
+  .crop-kicker,
+  .crop-header p {
+    display: none;
+  }
+
+  .ratio-bar {
+    padding: 0 16px 8px;
+  }
+
+  .crop-stage {
+    height: calc(100dvh - 148px);
+    margin: 0 16px;
+  }
+
+  .crop-footer {
+    padding: 8px 16px 10px;
+  }
 }
 </style>

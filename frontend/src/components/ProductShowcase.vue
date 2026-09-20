@@ -18,7 +18,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:activeId'])
+const emit = defineEmits(['update:activeId', 'change'])
 
 let idSeq = 0
 function createId(prefix = 'color') {
@@ -26,10 +26,16 @@ function createId(prefix = 'color') {
   return `${prefix}-${Date.now()}-${idSeq}`
 }
 
-/** Editable thumbnail list — main image follows active tab */
-const variants = ref([
+function clone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+const DEFAULT_VARIANTS = [
   { id: 'yellow', name: '姜黄', accent: '#C9A227', image: yellow },
-])
+]
+
+/** Editable thumbnail list — main image follows active tab */
+const variants = ref(DEFAULT_VARIANTS.map((item) => ({ ...item })))
 
 const active = computed(
   () => variants.value.find((v) => v.id === props.activeId) ?? variants.value[0],
@@ -69,6 +75,8 @@ const content = reactive({
   /** Per-field font size overrides (px), keyed by data-sync */
   fontSizes: {},
 })
+
+const DEFAULT_CONTENT = clone(content)
 
 const DEFAULT_FONT_SIZES = {
   priceLabel: 10,
@@ -168,6 +176,12 @@ function resetActiveFontSize() {
   const key = activeSyncKey.value
   if (!key) return
   delete content.fontSizes[key]
+}
+
+function onBoardInput(e) {
+  const t = e.target
+  if (!(t instanceof HTMLElement) || !t.isContentEditable || !t.dataset.sync) return
+  emit('change')
 }
 
 function onBoardFocusIn(e) {
@@ -284,11 +298,11 @@ function syncText(e, setter) {
   setter(readPlainText(e.target))
 }
 
-function applySyncKey(key, text) {
+function applySyncKey(key, text, target = content) {
   if (!key) return
   if (key.startsWith('spec.')) {
     const [, specId, field] = key.split('.')
-    const spec = content.specs.find((item) => item.id === specId)
+    const spec = target.specs?.find((item) => item.id === specId)
     if (spec && (field === 'label' || field === 'value')) {
       if (text) spec[field] = text
     }
@@ -296,47 +310,63 @@ function applySyncKey(key, text) {
   }
   if (key.startsWith('formulaNum.')) {
     const [, index, field] = key.split('.')
-    const item = content.formulaNums[Number(index)]
+    const item = target.formulaNums?.[Number(index)]
     if (item && (field === 'num' || field === 'label')) {
       if (text) item[field] = text
     }
     return
   }
-  if (Object.prototype.hasOwnProperty.call(content, key)) {
-    if (text) content[key] = text
+  if (Object.prototype.hasOwnProperty.call(target, key)) {
+    if (text) target[key] = text
   }
 }
 
+function overlayDomText(target) {
+  const root = boardEl.value
+  if (!root) return
+  root.querySelectorAll('[data-sync]').forEach((node) => {
+    if (!(node instanceof HTMLElement)) return
+    applySyncKey(node.dataset.sync, readPlainText(node), target)
+  })
+}
+
 /** Flush DOM edits before leaving edit mode (even if focus not blurred yet) */
-function flushEditableContent() {
+function flushEditableContent(blurActive = true) {
   const root = boardEl.value
   if (!root) return
 
   const ae = document.activeElement
   if (ae instanceof HTMLElement && root.contains(ae) && ae.isContentEditable) {
     applySyncKey(ae.dataset.sync, readPlainText(ae))
-    ae.blur()
+    if (blurActive) ae.blur()
   }
 
-  root.querySelectorAll('[data-sync]').forEach((node) => {
-    if (!(node instanceof HTMLElement)) return
-    applySyncKey(node.dataset.sync, readPlainText(node))
-  })
+  overlayDomText(content)
 }
 
 function getSnapshot() {
-  flushEditableContent()
-  return JSON.parse(
-    JSON.stringify({
-      activeId: props.activeId,
-      variants: variants.value,
-      content,
-    }),
-  )
+  const data = clone({
+    activeId: props.activeId,
+    variants: variants.value,
+    content,
+  })
+  overlayDomText(data.content)
+  return data
 }
+
+function resetToDefault() {
+  applySnapshot({
+    activeId: 'yellow',
+    variants: DEFAULT_VARIANTS.map((item) => ({ ...item })),
+    content: clone(DEFAULT_CONTENT),
+  })
+}
+
+let applyingSnapshot = false
 
 function applySnapshot(data) {
   if (!data || typeof data !== 'object') return
+  applyingSnapshot = true
 
   const nextContent = data.content
   if (nextContent && typeof nextContent === 'object') {
@@ -358,10 +388,21 @@ function applySnapshot(data) {
     emit('update:activeId', variants.value[0].id)
   }
 
-  nextTick(scheduleOverflowCheck)
+  nextTick(() => {
+    applyingSnapshot = false
+    scheduleOverflowCheck()
+  })
 }
 
-defineExpose({ flushEditableContent, getSnapshot, applySnapshot })
+watch(
+  () => [props.activeId, variants.value, content],
+  () => {
+    if (!applyingSnapshot) emit('change')
+  },
+  { deep: true },
+)
+
+defineExpose({ flushEditableContent, getSnapshot, applySnapshot, resetToDefault })
 
 function placeCaretAfter(node) {
   const sel = window.getSelection()
@@ -541,6 +582,7 @@ function removeVariant(variantId) {
     :style="boardStyle"
     @paste="onPastePlain"
     @focusin="onBoardFocusIn"
+    @input="onBoardInput"
   >
     <div
       v-if="editing && activeSyncKey"
@@ -945,6 +987,8 @@ function removeVariant(variantId) {
 <style scoped>
 .board-wrap {
   position: relative;
+  width: 100%;
+  height: 100%;
 }
 
 .overflow-warn {
@@ -983,6 +1027,7 @@ function removeVariant(variantId) {
   grid-template-columns: 1.05fr 1fr;
   gap: clamp(18px, 2.2vw, 32px);
   width: 100%;
+  height: 100%;
   aspect-ratio: 16 / 9;
   padding: clamp(18px, 2vw, 28px);
   box-sizing: border-box;
@@ -1661,19 +1706,9 @@ function removeVariant(variantId) {
 }
 
 @media (max-width: 900px) {
-  .board {
-    aspect-ratio: auto;
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-
-  .stage {
-    min-height: 280px;
-  }
-
-  .formula {
-    flex-direction: column;
-    align-items: flex-start;
+  .font-size-bar {
+    transform: translateX(-50%) scale(0.92);
+    transform-origin: top center;
   }
 }
 </style>

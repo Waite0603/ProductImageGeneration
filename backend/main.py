@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -49,8 +49,9 @@ class HistoryCreate(BaseModel):
     payload: dict
 
 
-class HistoryRename(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
+class HistoryUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    payload: dict | None = None
 
 
 @asynccontextmanager
@@ -68,18 +69,53 @@ app.add_middleware(
 )
 
 
+def escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"ok": True}
 
 
 @app.get("/api/histories")
-def list_histories() -> list[dict]:
+def list_histories(
+    q: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> dict:
+    keyword = q.strip()
+    offset = (page - 1) * page_size
+    where = ""
+    params: list = []
+    if keyword:
+        where = "WHERE name LIKE ? ESCAPE '\\'"
+        params.append(f"%{escape_like(keyword)}%")
+
     with get_conn() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS n FROM histories {where}",
+            params,
+        ).fetchone()["n"]
         rows = conn.execute(
-            "SELECT id, name, created_at FROM histories ORDER BY id DESC"
+            f"""
+            SELECT id, name, created_at
+            FROM histories
+            {where}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, page_size, offset],
         ).fetchall()
-    return [dict(row) for row in rows]
+
+    items = [dict(row) for row in rows]
+    return {
+        "items": items,
+        "total": int(total),
+        "page": page,
+        "page_size": page_size,
+        "has_more": offset + len(items) < int(total),
+    }
 
 
 @app.post("/api/histories")
@@ -110,12 +146,24 @@ def get_history(history_id: int) -> dict:
 
 
 @app.patch("/api/histories/{history_id}")
-def rename_history(history_id: int, body: HistoryRename) -> dict:
-    name = body.name.strip()
+def update_history(history_id: int, body: HistoryUpdate) -> dict:
+    if body.name is None and body.payload is None:
+        raise HTTPException(status_code=400, detail="没有要更新的内容")
+
+    sets = []
+    values = []
+    if body.name is not None:
+        sets.append("name = ?")
+        values.append(body.name.strip())
+    if body.payload is not None:
+        sets.append("payload = ?")
+        values.append(json.dumps(body.payload, ensure_ascii=False))
+    values.append(history_id)
+
     with get_conn() as conn:
         cur = conn.execute(
-            "UPDATE histories SET name = ? WHERE id = ?",
-            (name, history_id),
+            f"UPDATE histories SET {', '.join(sets)} WHERE id = ?",
+            values,
         )
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="记录不存在")

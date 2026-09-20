@@ -104,15 +104,20 @@ function submit() {
   position: fixed;
   inset: 0;
   z-index: 10050;
-  display: grid;
-  place-items: center;
-  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  overflow: auto;
   background: rgba(28, 22, 16, 0.48);
   backdrop-filter: blur(8px);
 }
 
 .modal-card {
   width: min(420px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
   padding: 22px 22px 18px;
   border-radius: 20px;
   background:

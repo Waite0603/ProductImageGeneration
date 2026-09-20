@@ -5,6 +5,17 @@ services:
       - /home/ubuntu/proCreate/data:/data
     environment:
       DATABASE_PATH: /data/showcase.db
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 8
     restart: unless-stopped
 
   web:
@@ -12,5 +23,6 @@ services:
     ports:
       - "8096:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
